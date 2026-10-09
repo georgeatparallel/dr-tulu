@@ -4,7 +4,7 @@ import time
 import os
 import signal
 
-def wait_for_port(port, host="localhost", timeout=180):
+def wait_for_port(port, host="localhost", timeout=1800):
     print(f"  Waiting for port {port}...")
     start = time.time()
     while time.time() - start < timeout:
@@ -16,6 +16,7 @@ def wait_for_port(port, host="localhost", timeout=180):
             time.sleep(1)
     raise TimeoutError(f"Port {port} not ready after {timeout}s")
 
+print("S2_API_KEY set:", "S2_API_KEY" in os.environ)
 S2_API_KEY = os.environ["S2_API_KEY"]
 
 print("[vllm] Starting...")
@@ -41,7 +42,7 @@ query = subprocess.Popen(
     shell=True, start_new_session=True,
 )
 try:
-    query.wait(timeout=18 * 60 * 60)
+    query.wait(timeout=60 * 60 * 60)
 except subprocess.TimeoutExpired:
     print("[timeout] 18h elapsed.")
 finally:
