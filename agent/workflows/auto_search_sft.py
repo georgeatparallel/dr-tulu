@@ -634,6 +634,7 @@ class AutoReasonSearchWorkflow(BaseWorkflow):
         verbose: bool = True,
         search_callback: Optional[Any] = None,
         step_callback: Optional[Any] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         cfg = self.configuration
         assert cfg is not None

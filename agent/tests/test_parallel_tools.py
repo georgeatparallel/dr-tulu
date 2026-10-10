@@ -123,7 +123,8 @@ def test_defaults_and_mixed_selection():
 
 
 @pytest.mark.asyncio
-async def test_workflow_agent_loop_and_concurrent_sessions(mcp_http, monkeypatch):
+@pytest.mark.parametrize("session_mode", ["one_shot", "explicit", "history_without_id"])
+async def test_workflow_agent_loop_and_concurrent_sessions(mcp_http, monkeypatch, session_mode):
     requests, _ = mcp_http
 
     async def completion(self, messages, **kwargs):
@@ -139,14 +140,38 @@ async def test_workflow_agent_loop_and_concurrent_sessions(mcp_http, monkeypatch
 
     monkeypatch.setattr(LLMToolClient, "_generate_single_response_commercial_api", completion)
     w = workflow(search_tool_name="parallel", browse_tool_name="parallel")
-    results = await asyncio.gather(w(problem="First question", verbose=False), w(problem="Second question", verbose=False))
+    from uuid import uuid4
+    ids = [str(uuid4()), str(uuid4())]
+    arguments = []
+    for index in range(2):
+        params = {"problem": "Same opening question", "verbose": False}
+        if session_mode != "one_shot":
+            params["messages"] = [{"role": "user", "content": "Same opening question"}]
+        if session_mode == "explicit":
+            params["session_id"] = ids[index]
+        arguments.append(params)
+    results = await asyncio.gather(*(w(**params) for params in arguments))
     assert all(r["total_tool_calls"] == 2 and r["total_failed_tool_calls"] == 0 for r in results)
     assert all(r["browsed_links"] == ["https://example.org/tulu"] for r in results)
     calls = [r["params"] for r in requests if r["method"] == "tools/call"]
-    search_sessions = {c["arguments"]["session_id"] for c in calls if c["name"] == "web_search"}
-    fetch_sessions = {c["arguments"]["session_id"] for c in calls if c["name"] == "web_fetch"}
-    assert len(search_sessions) == 2
-    assert search_sessions == fetch_sessions
+    if session_mode == "history_without_id":
+        assert all("session_id" not in c["arguments"] for c in calls)
+    else:
+        search_sessions = {c["arguments"]["session_id"] for c in calls if c["name"] == "web_search"}
+        fetch_sessions = {c["arguments"]["session_id"] for c in calls if c["name"] == "web_fetch"}
+        assert len(search_sessions) == 2
+        assert search_sessions == fetch_sessions
+        if session_mode == "explicit":
+            assert search_sessions == set(ids)
+            for index, params in enumerate(arguments):
+                params["messages"] += [
+                    {"role": "assistant", "content": results[index]["final_response"]},
+                    {"role": "user", "content": "Follow-up question"},
+                ]
+            await asyncio.gather(*(w(**params) for params in arguments))
+            calls = [r["params"] for r in requests if r["method"] == "tools/call"]
+            assert len(calls) == 8
+            assert all(sum(c["arguments"]["session_id"] == sid for c in calls) == 4 for sid in ids)
 
 
 @pytest.mark.asyncio
@@ -189,3 +214,26 @@ def test_remote_tools_skip_local_server_check(monkeypatch):
     monkeypatch.setattr(auto_search_sft, "check_port", unexpected_check)
     w = workflow(search_tool_name="parallel", browse_tool_name="parallel")
     w.before_launch_check()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/chat", "/chat/stream"])
+async def test_chat_api_forwards_only_supplied_conversation_id(endpoint):
+    from dr_agent.web_api import create_app
+    received = []
+
+    class ChatWorkflow:
+        async def __call__(self, **kwargs):
+            received.append(kwargs)
+            return {"final_response": "Answer"}
+
+    app = create_app(ChatWorkflow(), ui_mode="dev")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(endpoint, json={"content": "Question", "session_id": "conversation-1"})
+        assert response.status_code == 200
+        assert received[-1]["session_id"] == "conversation-1"
+        response = await client.post(endpoint, json={"content": "Question"})
+        assert response.status_code == 200
+        assert "session_id" not in received[-1]
+        response = await client.post(endpoint, json={"content": "Question", "session_id": "x" * 101})
+        assert response.status_code == 422

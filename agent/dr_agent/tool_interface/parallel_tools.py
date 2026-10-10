@@ -2,6 +2,7 @@
 
 from contextvars import ContextVar
 from functools import wraps
+from inspect import signature
 from uuid import uuid4
 
 from fastmcp import Client
@@ -16,10 +17,20 @@ _session_id = ContextVar("parallel_mcp_session_id", default=None)
 
 
 def with_parallel_session(function):
-    """Share a session across tools in one workflow call, including concurrent calls."""
+    """Use a supplied conversation ID without mixing concurrent workflow calls."""
+    call_signature = signature(function)
+
     @wraps(function)
     async def wrapped(*args, **kwargs):
-        token = _session_id.set(str(uuid4()))
+        arguments = call_signature.bind(*args, **kwargs).arguments
+        session_id = arguments.get("session_id")
+        if session_id is not None and not 1 <= len(session_id) <= 100:
+            raise ValueError("session_id must contain 1 to 100 characters")
+        # History does not identify a conversation uniquely. Without a caller's
+        # ID, omit the optional metadata rather than changing it between turns.
+        if session_id is None:
+            session_id = "" if arguments.get("messages") else str(uuid4())
+        token = _session_id.set(session_id)
         try:
             return await function(*args, **kwargs)
         finally:
@@ -45,7 +56,10 @@ class _ParallelMCPMixin:
         )
 
     def _parallel_metadata(self):
-        params = {"session_id": _session_id.get() or self.parallel_session_id}
+        session_id = _session_id.get()
+        if session_id is None:
+            session_id = self.parallel_session_id
+        params = {"session_id": session_id} if session_id else {}
         if self.parallel_model_name:
             params["model_name"] = self.parallel_model_name
         return params

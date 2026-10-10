@@ -83,6 +83,9 @@ for exploration and light use. The existing provider defaults stay unchanged.
 No local MCP server, `SERPER_API_KEY`, `S2_API_KEY`, or `JINA_API_KEY` is needed
 when both tools use Parallel. Your model service or model API credentials are
 still required; you can also use the OpenAI config above with the same overrides.
+Chat API clients can pass an optional `session_id` (1–100 characters) and reuse
+it across turns of one conversation. Clients without a conversation ID can leave
+it unset; no per-turn session ID is sent for chat history in that case.
 
 For tool-only usage without a model service:
 
